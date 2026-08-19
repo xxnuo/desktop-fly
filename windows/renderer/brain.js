@@ -9,9 +9,32 @@
 // relative rather than bare so the same module resolves in Node (tests)
 // and in the renderer without an inline importmap
 import * as THREE from '../node_modules/three/build/three.module.js';
+import { createTranslator } from '../src/i18n.js';
 
 const api = window.flyAPI;
 const labelEl = document.getElementById('label');
+let translate = createTranslator('en');
+const TYPE_KEYS = {
+  ascending: 'brainTypeAscending',
+  central: 'brainTypeCentral',
+  descending: 'brainTypeDescending',
+  optic: 'brainTypeOptic',
+  sensory: 'brainTypeSensory',
+  visual_centrifugal: 'brainTypeVisualCentrifugal',
+  visual_projection: 'brainTypeVisualProjection',
+};
+
+function t(key, values) { return translate(key, values); }
+
+function applyLanguage(language) {
+  translate = createTranslator(language);
+  document.documentElement.lang = language;
+  document.title = t('brainTitle');
+  labelEl.textContent = '';
+  labelEl.classList.remove('on');
+}
+
+api.onLanguage(applyLanguage);
 
 // super_class palette (index order from etl.py)
 const CLASS_COLORS = [
@@ -190,21 +213,21 @@ function regionName(picked) {
   const sideSuffix = (role) => {
     const l = picked.filter((i) => neurons.roles[i] === role && neurons.positions[3 * i] < 0).length;
     const r = picked.filter((i) => neurons.roles[i] === role).length - l;
-    return l === r ? '' : (l > r ? ' · left' : ' · right');
+    return l === r ? '' : ` · ${t(l > r ? 'sideLeft' : 'sideRight')}`;
   };
   switch (major) {
-    case 'lc4': case 'lplc2': return `⚡ Looming detectors (LC4/LPLC2)${sideSuffix(major)}`;
-    case 'gf': return '⚡ Giant Fiber (DNp01) — escape!';
-    case 'dna01': case 'dna02': return `⚡ Steering neurons (DNa01/02)${sideSuffix(major)}`;
-    case 'dnp09': return '⚡ Walking command (DNp09)';
-    case 'dng11': return '⚡ Grooming command (DNg11)';
-    case 'escw': return '⚡ Escape-wing DNs (DNp02/04/11)';
-    case 'mdn': return '⚡ Moonwalker neurons (MDN)';
+    case 'lc4': case 'lplc2': return `⚡ ${t('brainLooming')}${sideSuffix(major)}`;
+    case 'gf': return `⚡ ${t('brainGiantFiber')}`;
+    case 'dna01': case 'dna02': return `⚡ ${t('brainSteering')}${sideSuffix(major)}`;
+    case 'dnp09': return `⚡ ${t('brainWalking')}`;
+    case 'dng11': return `⚡ ${t('brainGrooming')}`;
+    case 'escw': return `⚡ ${t('brainEscapeWing')}`;
+    case 'mdn': return `⚡ ${t('brainMoonwalker')}`;
     default: {
       const anyOther = picked.find((i) => neurons.roles[i] === 'other');
-      let t = neurons.types[anyOther !== undefined ? anyOther : picked[0]];
-      if (!t || t === '?') t = 'central';
-      return `⚡ ${t} neurons`;
+      let type = neurons.types[anyOther !== undefined ? anyOther : picked[0]];
+      type = TYPE_KEYS[type] ? t(TYPE_KEYS[type]) : (type && type !== '?' ? type : t('brainTypeCentral'));
+      return `⚡ ${t('brainNeurons', { type })}`;
     }
   }
 }
@@ -335,8 +358,9 @@ function frame(tMs) {
 }
 
 (async () => {
+  applyLanguage(await api.getLanguage());
   const data = await api.getBrainData();
-  if (!data) { showLabel('no data/ — run etl.py first'); return; }
+  if (!data) { showLabel(t('noData')); return; }
   build(data.points, data.circuit);
   requestAnimationFrame(frame);
 })();

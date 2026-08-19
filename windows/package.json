@@ -7,9 +7,10 @@
   "scripts": {
     "start": "electron .",
     "linuxcheck": "node test/linuxcheck.js",
+    "i18ncheck": "node test/i18ncheck.js",
     "simtest": "node test/simtest.js",
     "behaviortest": "node test/behaviortest.js",
-    "test": "node test/simtest.js && node test/behaviortest.js"
+    "test": "node test/i18ncheck.js && node test/simtest.js && node test/behaviortest.js"
   },
   "license": "MIT",
   "dependencies": {

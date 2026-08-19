@@ -13,11 +13,15 @@
 
 import { app, BrowserWindow, Tray, Menu, screen, ipcMain, powerMonitor, nativeImage }
   from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadBrainData } from './src/data.js';
 import { circadianActivity, ThermalTempo } from './src/environment.js';
+import {
+  LANGUAGE_MODES, createTranslator, normalizeLanguageMode, resolveLanguage,
+} from './src/i18n.js';
 import * as win32 from './src/win32.js';
 import * as linux from './src/linux.js';
 
@@ -40,7 +44,68 @@ let mouseMovedAt = 0;
 const thermal = new ThermalTempo();
 
 let brainData = null;
-let dataInfo = 'no data — run etl.py';
+let dataInfo = null;
+let languageMode = 'auto';
+let languageFile = null;
+let activeLanguage = 'en';
+let translate = createTranslator(activeLanguage);
+
+function t(key, values) { return translate(key, values); }
+
+function systemLocales() {
+  try {
+    const preferred = typeof app.getPreferredSystemLanguages === 'function'
+      ? app.getPreferredSystemLanguages() : [];
+    const locale = typeof app.getLocale === 'function' ? app.getLocale() : '';
+    return [...preferred, locale];
+  } catch {
+    return [];
+  }
+}
+
+function updateLanguage() {
+  activeLanguage = resolveLanguage(languageMode, systemLocales());
+  translate = createTranslator(activeLanguage);
+}
+
+function loadLanguageMode() {
+  languageFile = path.join(app.getPath('userData'), 'language.json');
+  try {
+    const saved = JSON.parse(fs.readFileSync(languageFile, 'utf8'));
+    languageMode = normalizeLanguageMode(saved.mode);
+  } catch {
+    languageMode = 'auto';
+  }
+  updateLanguage();
+}
+
+function saveLanguageMode() {
+  try {
+    fs.mkdirSync(path.dirname(languageFile), { recursive: true });
+    fs.writeFileSync(languageFile, `${JSON.stringify({ mode: languageMode })}\n`);
+  } catch {
+    // A read-only profile should not prevent the tray menu from working.
+  }
+}
+
+function setLanguageMode(mode) {
+  if (!LANGUAGE_MODES.includes(mode)) return;
+  languageMode = mode;
+  saveLanguageMode();
+  updateLanguage();
+  if (tray) {
+    tray.setToolTip(t('trayTip'));
+    refreshTray();
+  }
+  if (brain && !brain.isDestroyed()) {
+    brain.setTitle(t('brainTitle'));
+    send(brain, 'language', activeLanguage);
+  }
+}
+
+function dataInfoLabel() {
+  return dataInfo ? t('dataInfo', dataInfo) : t('noData');
+}
 
 // The overlay spans every display, so the fly can walk and fly from one
 // monitor to the next the way it crosses any other part of the desktop.
@@ -121,7 +186,7 @@ function createBrain(d) {
     y: d.workArea.y + d.workArea.height - H - 18,
     width: W,
     height: H,
-    title: 'Fly Brain — FlyWire v783 (click = stimulate)',
+    title: t('brainTitle'),
     backgroundColor: '#080a10',
     skipTaskbar: true,
     alwaysOnTop: true,
@@ -165,46 +230,59 @@ function send(win, channel, payload) {
 function buildTrayMenu() {
   const multi = screen.getAllDisplays().length > 1;
   return Menu.buildFromTemplate([
-    { label: 'Desktop Fly', enabled: false },
-    { label: dataInfo, enabled: false },
+    { label: t('appName'), enabled: false },
+    { label: dataInfoLabel(), enabled: false },
     { type: 'separator' },
     {
-      label: paused ? 'Resume' : 'Pause',
+      label: paused ? t('resume') : t('pause'),
       click: () => { paused = !paused; send(overlay, 'cmd', { name: 'pause', value: paused }); refreshTray(); },
     },
     {
-      label: 'Show/Hide Brain',
+      label: t('showBrain'),
       click: () => {
         if (!brain) return;
         brainVisible = !brainVisible;
         if (brainVisible) brain.show(); else brain.hide();
       },
     },
-    { label: 'Escape Test (loom)', click: () => send(overlay, 'cmd', { name: 'escapeTest' }) },
+    { label: t('escapeTest'), click: () => send(overlay, 'cmd', { name: 'escapeTest' }) },
     {
       // Same electrode as clicking the cluster in the brain window, without
       // having to aim at a rotating point cloud.
-      label: 'Stimulate Neurons',
+      label: t('stimulate'),
       submenu: [
-        ['Grooming — DNg11', 'groom'],
-        ['Walk forward — DNp09', 'walk'],
-        ['Backward walk — MDN', 'backward'],
-        ['Escape takeoff — giant fiber DNp01', 'escape'],
-        ['Raise wings — DNp02/04/11', 'wings'],
-        ['Startle — sensory (tap)', 'tap'],
-        ['Steer left — DNa left', 'steerLeft'],
-        ['Steer right — DNa right', 'steerRight'],
-      ].map(([label, group]) => ({
-        label,
+        ['groom', 'groom'],
+        ['walk', 'walk'],
+        ['backward', 'backward'],
+        ['escape', 'escape'],
+        ['wings', 'wings'],
+        ['tap', 'tap'],
+        ['steerLeft', 'steerLeft'],
+        ['steerRight', 'steerRight'],
+      ].map(([key, group]) => ({
+        label: t(key),
         click: () => send(overlay, 'cmd', { name: 'stim', group }),
       })),
     },
-    ...(multi ? [{ label: 'Send Fly to Next Display', click: sendFlyToNextDisplay }] : []),
-    { label: 'Add Fly', click: () => send(overlay, 'cmd', { name: 'addFly' }) },
-    { label: 'Remove Fly', click: () => send(overlay, 'cmd', { name: 'removeFly' }) },
-    { label: 'Scare Flies', click: () => send(overlay, 'cmd', { name: 'scareAll' }) },
+    ...(multi ? [{ label: t('nextDisplay'), click: sendFlyToNextDisplay }] : []),
+    { label: t('addFly'), click: () => send(overlay, 'cmd', { name: 'addFly' }) },
+    { label: t('removeFly'), click: () => send(overlay, 'cmd', { name: 'removeFly' }) },
+    { label: t('scare'), click: () => send(overlay, 'cmd', { name: 'scareAll' }) },
+    {
+      label: t('language'),
+      submenu: [
+        ['auto', 'languageAuto'],
+        ['zh', 'languageZh'],
+        ['en', 'languageEn'],
+      ].map(([mode, key]) => ({
+        label: t(key),
+        type: 'radio',
+        checked: languageMode === mode,
+        click: () => setLanguageMode(mode),
+      })),
+    },
     { type: 'separator' },
-    { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
+    { label: t('quit'), click: () => { app.isQuitting = true; app.quit(); } },
   ]);
 }
 
@@ -347,10 +425,14 @@ app.setAppUserModelId('com.desktopfly.windows');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 app.whenReady().then(() => {
+  loadLanguageMode();
   brainData = loadBrainData();
   if (brainData) {
-    dataInfo = `FlyWire v783 · ${brainData.points.points.length} somas · `
-      + `circuit ${brainData.circuit.neurons.length}n/${brainData.circuit.edges.length}e`;
+    dataInfo = {
+      points: brainData.points.points.length,
+      neurons: brainData.circuit.neurons.length,
+      edges: brainData.circuit.edges.length,
+    };
   }
   if (!platform.linuxAvailable?.() && !platform.win32Available?.()) {
     process.stderr.write(`${platformName}: some desktop senses are unavailable\n`);
@@ -364,7 +446,7 @@ app.whenReady().then(() => {
   if (brainData) brain = createBrain(screen.getPrimaryDisplay());
 
   tray = new Tray(nativeImage.createFromPath(path.join(HERE, 'assets', 'tray.png')));
-  tray.setToolTip('Desktop Fly');
+  tray.setToolTip(t('trayTip'));
   refreshTray();
 
   mouseTimer = setInterval(pollAmbient, 1000 / 30);
@@ -377,6 +459,7 @@ app.whenReady().then(() => {
 });
 
 ipcMain.handle('brain-data', () => brainData);
+ipcMain.handle('language', () => activeLanguage);
 ipcMain.on('spikes', (_e, list) => send(brain, 'spikes', list));
 ipcMain.on('stimulate', (_e, req) => send(overlay, 'stimulate', req));
 

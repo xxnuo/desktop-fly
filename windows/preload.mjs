@@ -9,6 +9,7 @@ const on = (channel) => (fn) => {
 
 contextBridge.exposeInMainWorld('flyAPI', {
   getBrainData: () => ipcRenderer.invoke('brain-data'),
+  getLanguage: () => ipcRenderer.invoke('language'),
 
   // overlay renderer
   onAmbient: on('ambient'),
@@ -20,6 +21,7 @@ contextBridge.exposeInMainWorld('flyAPI', {
   sendSpikes: (list) => ipcRenderer.send('spikes', list),
 
   // brain renderer
+  onLanguage: on('language'),
   onSpikes: on('spikes'),
   stimulate: (req) => ipcRenderer.send('stimulate', req),
 });
