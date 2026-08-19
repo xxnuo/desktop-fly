@@ -1,6 +1,6 @@
-// main.js — the Electron main process: the Windows counterpart of AppDelegate
-// in main.swift. It owns the transparent click-through overlay, the brain
-// panel, the tray menu, and the permission-free environment senses.
+// main.js — the Electron main process: the Windows/Linux counterpart of
+// AppDelegate in main.swift. It owns the transparent click-through overlay,
+// the brain panel, the tray menu, and the permission-free environment senses.
 //
 // AppKit -> Electron/Win32 mapping:
 //   NSPanel .borderless + ignoresMouseEvents -> BrowserWindow transparent,
@@ -8,7 +8,7 @@
 //   NSStatusItem                             -> Tray
 //   NSEvent.mouseLocation                    -> screen.getCursorScreenPoint()
 //   CGEventSource idle                       -> powerMonitor.getSystemIdleTime()
-//   CGWindowListCopyWindowInfo               -> win32.listWindows (see win32.js)
+//   CGWindowListCopyWindowInfo               -> platform.listWindows
 //   NSScreen.screens                         -> screen.getAllDisplays()
 
 import { app, BrowserWindow, Tray, Menu, screen, ipcMain, powerMonitor, nativeImage }
@@ -18,10 +18,13 @@ import { fileURLToPath } from 'node:url';
 
 import { loadBrainData } from './src/data.js';
 import { circadianActivity, ThermalTempo } from './src/environment.js';
-import { listWindows, pollMouseButtons, win32Available } from './src/win32.js';
+import * as win32 from './src/win32.js';
+import * as linux from './src/linux.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEBUG = !!process.env.DESKTOPFLY_DEBUG;
+const platform = process.platform === 'linux' ? linux : win32;
+const platformName = process.platform === 'linux' ? 'linux/X11' : 'Windows';
 
 let overlay = null;
 let brain = null;
@@ -232,7 +235,7 @@ function publishGeometry() {
   const b = overlay.getBounds();
   const want = virtualBounds();
   if (DEBUG && (b.width !== want.width || b.height !== want.height)) {
-    process.stderr.write(`overlay clamped by Windows: wanted ${want.width}x${want.height}, `
+    process.stderr.write(`overlay bounds adjusted by ${platformName}: wanted ${want.width}x${want.height}, `
       + `got ${b.width}x${b.height}
 `);
   }
@@ -248,6 +251,23 @@ function placeBrain() {
                     d.workArea.y + d.workArea.height - H - 18);
 }
 
+function screenPointToDip(point) {
+  if (process.platform === 'win32' && screen.screenToDipPoint) {
+    return screen.screenToDipPoint(point);
+  }
+  if (process.platform !== 'linux') return point;
+  // X11 tools report physical pixels while Electron normally exposes DIP.
+  // At scaleFactor 1 this is a no-op; for scaled displays convert relative to
+  // the display origin without affecting the virtual-desktop coordinates.
+  const display = screen.getDisplayNearestPoint(point);
+  const scale = display?.scaleFactor || 1;
+  if (scale === 1) return point;
+  return {
+    x: display.bounds.x + (point.x - display.bounds.x * scale) / scale,
+    y: display.bounds.y + (point.y - display.bounds.y * scale) / scale,
+  };
+}
+
 // ---- environment senses ----
 
 // 30 Hz: cursor, taps, typing, circadian hour, idleness, thermal tempo
@@ -260,7 +280,7 @@ function pollAmbient() {
   if (moved) mouseMovedAt = now;
   prevCursor = cursor;
 
-  const buttons = pollMouseButtons();
+  const buttons = platform.pollMouseButtons();
   if (buttons.left || buttons.right) {
     mouseMovedAt = now;
     // a global click = a tap on the fly's substrate -> sensory pathway
@@ -293,10 +313,10 @@ function pollWindows() {
   const ledges = [];
   const newWindows = [];
 
-  for (const w of listWindows(process.pid)) {
-    // Win32 reports physical pixels; Electron's geometry is in DIP
-    const tlp = screen.screenToDipPoint({ x: w.left, y: w.top });
-    const brp = screen.screenToDipPoint({ x: w.right, y: w.bottom });
+  for (const w of platform.listWindows(process.pid)) {
+    // Platform backends report physical pixels; Electron's geometry is in DIP.
+    const tlp = screenPointToDip({ x: w.left, y: w.top });
+    const brp = screenPointToDip({ x: w.right, y: w.bottom });
     const tl = toScene(tlp.x, tlp.y);
     const br = toScene(brp.x, brp.y);
 
@@ -332,8 +352,8 @@ app.whenReady().then(() => {
     dataInfo = `FlyWire v783 · ${brainData.points.points.length} somas · `
       + `circuit ${brainData.circuit.neurons.length}n/${brainData.circuit.edges.length}e`;
   }
-  if (!win32Available()) {
-    process.stderr.write('win32: running without window terrain (koffi unavailable)\n');
+  if (!platform.linuxAvailable?.() && !platform.win32Available?.()) {
+    process.stderr.write(`${platformName}: some desktop senses are unavailable\n`);
   }
 
   desktop = virtualBounds();
@@ -365,4 +385,5 @@ app.on('before-quit', () => {
   app.isQuitting = true;
   clearInterval(mouseTimer);
   clearInterval(windowTimer);
+  linux.stopInputMonitor();
 });

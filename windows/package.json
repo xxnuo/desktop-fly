@@ -6,6 +6,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "linuxcheck": "node test/linuxcheck.js",
     "simtest": "node test/simtest.js",
     "behaviortest": "node test/behaviortest.js",
     "test": "node test/simtest.js && node test/behaviortest.js"
@@ -17,5 +18,11 @@
   },
   "devDependencies": {
     "electron": "^32.2.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "koffi"
+    ]
   }
 }
